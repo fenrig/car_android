@@ -1,45 +1,33 @@
 package com.fenrig.denayer.car_android;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.OutputStream;
 import java.io.PrintWriter;
-
 import java.net.DatagramPacket;
-import java.net.DatagramSocket; // added
+import java.net.DatagramSocket;
 import java.net.InetAddress;
-import java.net.InterfaceAddress;
-import java.net.NetworkInterface;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.List;
 
-import android.R.bool;
-import android.net.DhcpInfo;
+import android.app.Activity;
+import android.content.Context;
 import android.net.wifi.WifiManager;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
-import android.app.Activity;
-import android.content.Context;
 import android.util.Log;
 import android.view.Menu;
 import android.view.View;
-import android.view.View.OnClickListener; // added
 import android.widget.ArrayAdapter;
-import android.widget.Button; // added
+import android.widget.Button;
 import android.widget.RelativeLayout;
 import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
-
-import com.fenrig.denayer.car_android.*;
 
 // TODO: authenticate as remote
 // TODO: http://www.mkyong.com/android/android-spinner-drop-down-list-example/
@@ -56,6 +44,7 @@ public class MainActivity extends Activity{
 	private List<String> origin_list;
 	private Spinner spin_destination;
 	private List<String> destination_list;
+	private threadStateMachine tSM;
 	
 	
 	@Override
@@ -82,6 +71,7 @@ public class MainActivity extends Activity{
 		origin_list = new ArrayList<String>();
 		spin_destination = (Spinner) findViewById(R.id.spin_destination);
 		destination_list = new ArrayList<String>();
+		tSM = new threadStateMachine();
 		// -------
 	}
 	
@@ -150,6 +140,8 @@ public class MainActivity extends Activity{
 			case 7:
 				Toast.makeText(getApplicationContext(), 
 						msg.getData().getString("notification"), Toast.LENGTH_LONG).show();
+			case 8:
+				spin_list.clear();
 			default:
 				break;
 			}
@@ -157,16 +149,40 @@ public class MainActivity extends Activity{
 		}
 	};
 	
+	public class threadStateMachine{
+		private boolean fanny;
+		private Object lock = new Object();
+		
+		threadStateMachine(){
+			fanny = false;
+		}
+		
+		public boolean getFanny(){
+			synchronized (lock){
+				return fanny;
+			}
+		}
+		
+		public void setFanny(boolean x){
+			synchronized (lock){
+				fanny = x;
+			}
+		}
+	}
 	
 	public class ConnectThread extends AsyncTask<String, Integer, Boolean>{
 		private WifiManager mWifi;
+		private threadStateMachine tSM;
 		
-		ConnectThread(WifiManager wifi) {
+		ConnectThread(WifiManager wifi, threadStateMachine x) {
 	        mWifi = wifi;
+	        tSM = x;
 	    }
 		
 		@Override
 		protected Boolean doInBackground(String... arg0) {
+			if(tSM.getFanny()) return null;
+			tSM.setFanny(true);
 			try{
 				DatagramSocket udp_sock;
 				udp_sock = new DatagramSocket(6666);
@@ -185,6 +201,7 @@ public class MainActivity extends Activity{
 					try{
 						udp_sock.receive(inmsg);
 					}catch (SocketTimeoutException e) {
+						Log.e("Discovery", "timeout");
 						continue;
 					}
 					
@@ -200,29 +217,12 @@ public class MainActivity extends Activity{
 			    // AUTH
 			    pw.write("advan_remote");
 			    pw.flush();
-			    // Get controllable cars
-			    pw.write("getCar_V2");
-			    pw.flush();
 			    
+			    tSM.setFanny(false);
 			    
-			    byte[] in_buf = new byte[256];
-			    nis.read(in_buf, 0, 256);
+			    getCarsThread jeej = new getCarsThread(con, pw, nis, tSM);
+				jeej.execute();
 			    
-			    String answer = new String(in_buf);
-			    Log.e("getCar_V2-Response", answer);
-			    
-			    if(answer.trim().equals(new String("-"))){
-			    	addItemToCarChooser("Geen");
-			    }else{
-			    	String[] parts = answer.trim().split(";");
-			    	for(String it : parts){
-			    		if(it != "") addItemToCarChooser(it);
-			    	}
-			    }
-			    
-			    makeCarChooserVisible(true);
-			    
-			    in_buf = new byte[56];
 			    
 			    /*
 			    Message m = new Message();
@@ -251,6 +251,75 @@ public class MainActivity extends Activity{
 				e.printStackTrace();
 				Log.e("Discovery", "error", e);
 			}
+			tSM.setFanny(false);
+			
+			return null;
+		}
+		
+		
+		
+	}
+	
+	public void connect(View arg0) throws IOException{
+		// sender jeej = new sender();
+		// jeej.run();
+		ConnectThread jeej = new ConnectThread((WifiManager) getSystemService(Context.WIFI_SERVICE), tSM);
+		jeej.execute();
+	}
+	
+	public void refresh(View arg0) throws IOException{
+		getCarsThread jeej = new getCarsThread(con, pw, nis, tSM);
+		jeej.execute();
+	}
+	
+	public class getCarsThread extends AsyncTask<String, Integer, Boolean>{
+		private Socket sock;
+		private PrintWriter pw;
+		private InputStream nis;
+		private threadStateMachine tSM;
+		
+		getCarsThread(Socket x, PrintWriter x2, InputStream x3, threadStateMachine x4) {
+	        sock = x;
+	        pw = x2;
+	        nis = x3;
+	        tSM = x4;
+	    }
+		
+		@Override
+		protected Boolean doInBackground(String... arg0) {
+			if(tSM.getFanny()) return null;
+			tSM.setFanny(true);
+			
+			clearCarChooser();
+			
+			// Get controllable cars
+		    pw.write("getCar_V2");
+		    pw.flush();
+		    
+		    
+		    byte[] in_buf = new byte[256];
+		    try {
+				nis.read(in_buf, 0, 256);
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				return null;
+			}
+		    
+		    String answer = new String(in_buf);
+		    Log.e("getCar_V2-Response", answer);
+		    
+		    if(answer.trim().equals(new String("-"))){
+		    	addItemToCarChooser("Geen");
+		    }else{
+		    	String[] parts = answer.trim().split(";");
+		    	for(String it : parts){
+		    		if(it != "") addItemToCarChooser(it);
+		    	}
+		    }
+		    
+		    makeCarChooserVisible(true);
+		    
+			tSM.setFanny(false);
 			return null;
 		}
 		
@@ -270,13 +339,12 @@ public class MainActivity extends Activity{
 			myUpdateHandler.sendMessage(m);
 		}
 		
-	}
-	
-	public void connect(View arg0) throws IOException{
-		// sender jeej = new sender();
-		// jeej.run();
-		ConnectThread jeej = new ConnectThread((WifiManager) getSystemService(Context.WIFI_SERVICE));
-		jeej.execute();
+		public void clearCarChooser(){
+			Message m = new Message();
+			m.what = 8;
+			myUpdateHandler.sendMessage(m);
+		}
+		
 	}
 	
 	public class ChooseCarThread extends AsyncTask<String, Integer, Boolean>{
@@ -284,16 +352,21 @@ public class MainActivity extends Activity{
 		private PrintWriter out;
 		private InputStream in;
 		private String car;
+		private threadStateMachine tSM;
 		
-		ChooseCarThread(Socket x, PrintWriter x2, InputStream x3, String x4) {
+		ChooseCarThread(Socket x, PrintWriter x2, InputStream x3, String x4, threadStateMachine x5) {
 	        sock = x;
 	        out = x2;
 	        in = x3;
 	        car = x4;
+	        tSM = x5;
 	    }
 		
 		@Override
 		protected Boolean doInBackground(String... arg0) {
+			if(tSM.getFanny()) return null;
+			tSM.setFanny(true);
+			
 			out.write("set_car");
 			out.flush();
 			out.write(car);
@@ -305,11 +378,13 @@ public class MainActivity extends Activity{
 				Message m = new Message();
 				m.what = 5;
 				myUpdateHandler.sendMessage(m);
+				tSM.setFanny(false);
 				return null;
 			}
 		    String answer = new String(in_buf);
 		    if(answer.trim().equals("set_car failed")){
 		    	Log.e("Setting Car", "Failed");
+		    	tSM.setFanny(false);
 		    	return null;
 		    }
 		    Log.e("Setting Car", "Succeeded");
@@ -324,6 +399,7 @@ public class MainActivity extends Activity{
 				Message m = new Message();
 				m.what = 5;
 				myUpdateHandler.sendMessage(m);
+				tSM.setFanny(false);
 				return null;
 			}
 		    
@@ -341,6 +417,7 @@ public class MainActivity extends Activity{
 		    Message m = new Message();
 			m.what = 3;
 			myUpdateHandler.sendMessage(m);
+			tSM.setFanny(false);
 			return null;
 		}
 		
@@ -352,17 +429,22 @@ public class MainActivity extends Activity{
 		private InputStream in;
 		private String origin;
 		private String destination;
+		private threadStateMachine tSM;
 		
-		SetDestOriginThread(Socket x, PrintWriter x2, InputStream x3, String x4, String x5) {
+		SetDestOriginThread(Socket x, PrintWriter x2, InputStream x3, String x4, String x5, threadStateMachine x6) {
 	        sock = x;
 	        out = x2;
 	        in = x3;
 	        origin = x4;
 	        destination = x5;
+	        tSM = x6;
 	    }
 		
 		@Override
 		protected Boolean doInBackground(String... arg0) {
+			if(tSM.getFanny()) return null;
+			tSM.setFanny(true);
+			
 			out.write("set_origin");
 			out.flush();
 			out.write(origin);
@@ -379,12 +461,14 @@ public class MainActivity extends Activity{
 				m = new Message();
 				m.what = 5;
 				myUpdateHandler.sendMessage(m);
+				tSM.setFanny(false);
 				return null;
 			}
 		    String answer = new String(in_buf);
 		    if(answer.trim().equals("set_origin failed")){
 		    	Log.e("Setting Origin", "Failed");
 		    	notif("Set Origin failed.");
+		    	tSM.setFanny(false);
 		    	return null;
 		    }
 		    Log.e("Setting Origin", "Succeeded");
@@ -402,12 +486,14 @@ public class MainActivity extends Activity{
 				m = new Message();
 				m.what = 5;
 				myUpdateHandler.sendMessage(m);
+				tSM.setFanny(false);
 				return null;
 			}
 		    String answer2 = new String(in_buf2);
 		    if(answer2.trim().equals("set_destination failed")){
 		    	notif("Set Destination failed.");
 		    	Log.e("Setting Destination", "Failed");
+		    	tSM.setFanny(false);
 		    	return null;
 		    }
 		    Log.e("Setting Destination", "Succeeded");
@@ -415,6 +501,7 @@ public class MainActivity extends Activity{
 		    
 		    notif("Drives!");
 		    
+		    tSM.setFanny(false);
 			return null;
 		}
 		
@@ -431,7 +518,7 @@ public class MainActivity extends Activity{
 	
 	public void choose_car(View arg0) throws IOException{
 		
-		ChooseCarThread jeej = new ChooseCarThread(con, pw, nis, spin.getSelectedItem().toString());
+		ChooseCarThread jeej = new ChooseCarThread(con, pw, nis, spin.getSelectedItem().toString(), tSM);
 		jeej.execute();
 	}
 	
@@ -445,12 +532,12 @@ public class MainActivity extends Activity{
 	}
 	
 	public void set_dest_origin(View arg0) throws IOException{
-		SetDestOriginThread jeej = new SetDestOriginThread(con, pw, nis, spin_origin.getSelectedItem().toString(), spin_destination.getSelectedItem().toString());
+		SetDestOriginThread jeej = new SetDestOriginThread(con, pw, nis, spin_origin.getSelectedItem().toString(), spin_destination.getSelectedItem().toString(), tSM);
 		jeej.execute();
 	}
 	
 	public void lock(View arg0) throws IOException{
-		lockThread jeej = new lockThread(con, pw, nis);
+		lockThread jeej = new lockThread(con, pw, nis, tSM);
 		jeej.execute();
 	}
 	
@@ -458,20 +545,27 @@ public class MainActivity extends Activity{
 		private Socket sock;
 		private PrintWriter out;
 		private InputStream in;
+		private threadStateMachine tSM;
 		
-		lockThread(Socket x, PrintWriter x2, InputStream x3) {
+		lockThread(Socket x, PrintWriter x2, InputStream x3, threadStateMachine x4) {
 	        sock = x;
 	        out = x2;
 	        in = x3;
+	        tSM = x4;
 	    }
 		
 		@Override
 		protected Boolean doInBackground(String... arg0) {
+			if(tSM.getFanny()) return null;
+			tSM.setFanny(true);
+			
 			out.write("lock");
 			out.flush();
 			Message m = new Message();
 			m.what = 6;
 			myUpdateHandler.sendMessage(m);
+			
+			tSM.setFanny(false);
 			return null;
 		}
 		

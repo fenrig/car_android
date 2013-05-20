@@ -38,6 +38,14 @@
 	        android:layout_below="@+id/combo"
 	        android:text="Control Car"
 	        android:onClick="choose_car"/>
+		
+		<Button 
+		    android:id="@+id/btn_refresh"
+		    android:layout_width="fill_parent"
+		    android:layout_height="wrap_content"
+		    android:layout_below="@+id/btn_setcar"
+		    android:text="Refresh"
+		    android:onClick="refresh"/>
         
     </RelativeLayout>
     
